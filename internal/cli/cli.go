@@ -25,7 +25,7 @@ const usage = `mdq - query markdown without reading the whole file
 
   mdq tree FILE [--depth N]                 outline: headings, line ranges, sizes
   mdq toc FILE [--depth N]                  headings and line numbers only
-  mdq section FILE HEADING|LINE [flags]     print one section
+  mdq section FILE HEADING|LINE... [flags]  print one or more sections
   mdq grep FILE|DIR PATTERN [-i]            search, each hit tagged with its section
   mdq tasks FILE|DIR [flags]                list task items
   mdq help                                  this text
@@ -51,6 +51,10 @@ global:
 HEADING matching is case insensitive and ignores leading hashes, emoji and
 trailing status text. A unique prefix works, so does /a regex/, so does a line
 number. Several matches print the candidates and exit 2.
+
+section takes several HEADING arguments and prints each one in the order given,
+each under its own FILE:LINE: header. --max-lines applies per section. A heading
+that does not resolve reports itself and the rest still print.
 `
 
 // Run executes one mdq invocation and returns the process exit code.
@@ -145,32 +149,71 @@ func cmdSection(argv []string, out io.Writer) (int, error) {
 		return Ambiguous, err
 	}
 	if len(a.pos) < 2 {
-		return Ambiguous, fmt.Errorf("usage: mdq section FILE HEADING [--no-children] [--no-body]")
+		return Ambiguous, fmt.Errorf("usage: mdq section FILE HEADING [HEADING...] [--no-children] [--no-body]")
 	}
 	maxLines, err := a.num("max-lines", 200)
 	if err != nil {
 		return Ambiguous, err
 	}
 	file := a.pos[0]
-	query := strings.Join(a.pos[1:], " ")
 	doc, err := md.ParseFile(file)
 	if err != nil {
 		return NoMatch, err
 	}
-	m := doc.FindHeading(query)
-	if len(m.Found) == 0 {
-		fmt.Fprintf(out, "%s: no heading matches %q\n", doc.File, query)
-		return NoMatch, nil
-	}
-	if m.Ambiguous {
-		fmt.Fprintf(out, "%s: %d headings match %q, pick one\n", doc.File, len(m.Found), query)
-		for _, h := range m.Found {
-			fmt.Fprintf(out, "%s:%d: %s\n", doc.File, h.Line, marked(h))
+
+	resolved, ambiguous, missing := 0, 0, 0
+	for i, query := range sectionQueries(doc, a.pos[1:]) {
+		if i > 0 {
+			fmt.Fprintln(out)
 		}
-		return Ambiguous, nil
+		m := doc.FindHeading(query)
+		switch {
+		case len(m.Found) == 0:
+			missing++
+			reportNoHeading(out, doc, query)
+		case m.Ambiguous:
+			ambiguous++
+			fmt.Fprintf(out, "%s: %d headings match %q, pick one\n", doc.File, len(m.Found), query)
+			for _, h := range m.Found {
+				fmt.Fprintf(out, "%s:%d: %s\n", doc.File, h.Line, marked(h))
+			}
+		default:
+			resolved++
+			printSection(out, doc, m.Found[0], a, maxLines)
+		}
 	}
 
-	h := m.Found[0]
+	switch {
+	case missing == 0 && ambiguous == 0:
+		return OK, nil
+	case resolved == 0 && ambiguous == 0:
+		return NoMatch, nil
+	default:
+		return Ambiguous, nil
+	}
+}
+
+// sectionQueries reads every positional argument as a heading of its own. An
+// unquoted multi word heading arrives as several arguments, so when at least
+// one argument fails to resolve on its own and the joined form resolves to a
+// single heading, the joined form is used instead.
+func sectionQueries(doc *md.Document, args []string) []string {
+	if len(args) < 2 {
+		return args
+	}
+	for _, q := range args {
+		if len(doc.FindHeading(q).Found) != 1 {
+			joined := strings.Join(args, " ")
+			if len(doc.FindHeading(joined).Found) == 1 {
+				return []string{joined}
+			}
+			return args
+		}
+	}
+	return args
+}
+
+func printSection(out io.Writer, doc *md.Document, h md.Heading, a argSet, maxLines int) {
 	if !h.Pseudo {
 		fmt.Fprintf(out, "%s:%d: %s\n", doc.File, h.Line, h.Raw)
 	} else {
@@ -190,7 +233,7 @@ func cmdSection(argv []string, out io.Writer) (int, error) {
 		}
 		fmt.Fprintf(out, "(section %s, %d lines, %s tokens, body not printed)\n",
 			rangeOf(h), h.End-h.Line+1, tokens(h.Tokens))
-		return OK, nil
+		return
 	}
 
 	body := doc.Body(h)
@@ -198,7 +241,41 @@ func cmdSection(argv []string, out io.Writer) (int, error) {
 		body = doc.OwnBody(h)
 	}
 	printBody(out, body, maxLines)
-	return OK, nil
+}
+
+// reportNoHeading says what was looked for, how big the haystack was and which
+// headings come closest, so a miss is an answer rather than a bare exit code.
+func reportNoHeading(out io.Writer, doc *md.Document, query string) {
+	fmt.Fprintf(out, "no heading matching '%s' in %s (%s)\n",
+		query, doc.File, plural(len(doc.Headings), "heading"))
+	near := doc.Nearest(query, 3)
+	labels := make([]string, len(near))
+	for i, h := range near {
+		labels[i] = fmt.Sprintf("%q :%d", clip(h.Text, 60), h.Line)
+	}
+	printClosest(out, labels)
+	fmt.Fprintf(out, "try a shorter heading or `mdq toc %s`\n", doc.File)
+}
+
+// printClosest writes the closest headings block, continuation lines aligned
+// under the first one.
+func printClosest(out io.Writer, labels []string) {
+	const lead = "closest headings: "
+	for i, l := range labels {
+		if i == 0 {
+			fmt.Fprint(out, lead)
+		} else {
+			fmt.Fprint(out, strings.Repeat(" ", len(lead)))
+		}
+		fmt.Fprintln(out, l)
+	}
+}
+
+func plural(n int, word string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, word)
+	}
+	return fmt.Sprintf("%d %ss", n, word)
 }
 
 func printBody(out io.Writer, body []string, maxLines int) {
@@ -231,16 +308,28 @@ func cmdGrep(argv []string, out io.Writer) (int, error) {
 	if err != nil {
 		return Ambiguous, err
 	}
-	files, err := collect(a.pos[0])
+	target := a.pos[0]
+	pattern := a.pos[1]
+	info, err := os.Stat(target)
 	if err != nil {
 		return NoMatch, err
 	}
+	files, err := collect(target)
+	if err != nil {
+		return NoMatch, err
+	}
+	words := md.QueryWords(pattern)
+	scope := grepScope{dir: info.IsDir()}
+	var near []nearHit
 	hits := 0
 	for _, f := range files {
 		doc, err := md.ParseFile(f)
 		if err != nil {
 			return NoMatch, err
 		}
+		scope.files++
+		scope.lines += len(doc.Lines)
+		scope.headings += len(doc.Headings)
 		var found []int
 		for i, line := range doc.Lines {
 			if re.MatchString(line) {
@@ -248,6 +337,14 @@ func cmdGrep(argv []string, out io.Writer) (int, error) {
 			}
 		}
 		if len(found) == 0 {
+			// Only worth ranking while the search is still empty overall.
+			if hits == 0 && len(words) > 0 {
+				for _, h := range doc.Headings {
+					if s := md.HeadingScore(h, words); s > 0 {
+						near = append(near, nearHit{doc.File, h, s})
+					}
+				}
+			}
 			continue
 		}
 		hits += len(found)
@@ -263,9 +360,61 @@ func cmdGrep(argv []string, out io.Writer) (int, error) {
 		}
 	}
 	if hits == 0 {
+		reportNoGrepMatch(out, target, pattern, scope, near)
 		return NoMatch, nil
 	}
 	return OK, nil
+}
+
+// grepScope is how much was searched, so a miss can say whether the pattern was
+// too narrow or the haystack too small.
+type grepScope struct {
+	dir      bool
+	files    int
+	lines    int
+	headings int
+}
+
+type nearHit struct {
+	file  string
+	h     md.Heading
+	score int
+}
+
+func reportNoGrepMatch(out io.Writer, target, pattern string, scope grepScope, near []nearHit) {
+	size := fmt.Sprintf("%s, %s", plural(scope.lines, "line"), plural(scope.headings, "heading"))
+	if scope.dir {
+		size = fmt.Sprintf("%s, %s", plural(scope.files, "file"), plural(scope.headings, "heading"))
+	}
+	fmt.Fprintf(out, "no match for /%s/ in %s (%s)\n", pattern, target, size)
+
+	sort.SliceStable(near, func(i, j int) bool {
+		if near[i].score != near[j].score {
+			return near[i].score > near[j].score
+		}
+		if near[i].file != near[j].file {
+			return near[i].file < near[j].file
+		}
+		return near[i].h.Line < near[j].h.Line
+	})
+	if len(near) > 3 {
+		near = near[:3]
+	}
+	labels := make([]string, len(near))
+	for i, n := range near {
+		if scope.dir {
+			labels[i] = fmt.Sprintf("%q %s:%d", clip(n.h.Text, 60), n.file, n.h.Line)
+		} else {
+			labels[i] = fmt.Sprintf("%q :%d", clip(n.h.Text, 60), n.h.Line)
+		}
+	}
+	printClosest(out, labels)
+
+	if scope.dir {
+		fmt.Fprintf(out, "try a shorter pattern or one file\n")
+		return
+	}
+	fmt.Fprintf(out, "try a shorter pattern or `mdq toc %s`\n", target)
 }
 
 func where(doc *md.Document, line int) string {

@@ -1,6 +1,9 @@
 package md
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestNormalizeAndCore(t *testing.T) {
 	cases := []struct{ in, norm, core string }{
@@ -45,6 +48,53 @@ func TestFindHeadingTiers(t *testing.T) {
 	}
 	if m := d.FindHeading("nothing like this"); len(m.Found) != 0 {
 		t.Fatalf("expected no match, got %d", len(m.Found))
+	}
+}
+
+func TestQueryWords(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"Asset chat image swap", "asset chat image swap"},
+		{"^## (Plan|Code)$", "plan code"},
+		{`\bqueue\b writes`, "queue writes"},
+		{"the and of a", ""},
+		{"Plan plan PLAN", "plan"},
+	}
+	for _, c := range cases {
+		if got := strings.Join(QueryWords(c.in), " "); got != c.want {
+			t.Errorf("QueryWords(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestNearestRanksBySharedWords(t *testing.T) {
+	d := load(t)
+	near := d.Nearest("Ambiguous Three", 3)
+	if len(near) != 2 {
+		t.Fatalf("expected the two ambiguous headings, got %+v", near)
+	}
+	if near[0].Text != "Ambiguous One" || near[1].Text != "Ambiguous Two" {
+		t.Fatalf("ties should fall back to line order: %+v", near)
+	}
+	near = d.Nearest("deep plan", 3)
+	if len(near) != 2 || near[0].Text != "Plan" {
+		t.Fatalf("expected Plan and Deep in line order: %+v", near)
+	}
+	if got := d.Nearest("zzzqqq", 3); len(got) != 0 {
+		t.Fatalf("a query sharing no word should rank nothing: %+v", got)
+	}
+	if got := d.Nearest("Ambiguous Three", 1); len(got) != 1 {
+		t.Fatalf("n should cap the result: %+v", got)
+	}
+}
+
+func TestNearestIsDeterministic(t *testing.T) {
+	d := load(t)
+	a := d.Nearest("ambiguous plan code deep", 3)
+	b := d.Nearest("ambiguous plan code deep", 3)
+	for i := range a {
+		if a[i].Line != b[i].Line {
+			t.Fatal("two runs disagree")
+		}
 	}
 }
 

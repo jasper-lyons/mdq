@@ -30,7 +30,7 @@ Go 1.25, standard library only, single static binary.
 ```
 mdq tree FILE [--depth N]                 outline: headings, line ranges, sizes
 mdq toc FILE [--depth N]                  headings and line numbers only
-mdq section FILE HEADING|LINE [flags]     print one section
+mdq section FILE HEADING|LINE... [flags]  print one or more sections
 mdq grep FILE|DIR PATTERN [-i]            search, each hit tagged with its section
 mdq tasks FILE|DIR [flags]                list task items
 mdq help                                  usage
@@ -105,6 +105,41 @@ A truncated body ends with a marker rather than stopping silently:
 ... (147 more lines, use --max-lines or a narrower heading)
 ```
 
+Several headings in one call print several sections, in the order given. Each
+one keeps its own `FILE:LINE:` header, so the output says where every block came
+from, and `--max-lines` applies per section rather than to the whole run.
+
+```sh
+mdq section docs/guide.md 'Conventions' 'Endpoints' 'Package: backend'
+docs/guide.md:6: ## Conventions
+...
+
+docs/guide.md:157: ## Endpoints
+...
+
+docs/guide.md:298: ## Package: backend
+...
+```
+
+Quote each heading. An unquoted multi word heading arrives as several arguments,
+and mdq only joins them back up when they fail to resolve one by one and the
+joined form resolves to a single heading.
+
+A heading that does not resolve reports itself and the remaining headings still
+print. A missing one names the file it searched and offers the nearest headings
+it did find:
+
+```sh
+mdq section docs/todo.md 'Nonexistent heading'
+no heading matching 'Nonexistent heading' in docs/todo.md (93 headings)
+closest headings: "Setext heading rules" :212
+try a shorter heading or `mdq toc docs/todo.md`
+```
+
+An ambiguous one lists its candidates as before. The exit code is 0 when every
+heading resolved, 1 when none did, and 2 when some resolved and others did not,
+or when any was ambiguous.
+
 ### grep
 
 Search, but every hit says which section it sits in, so there is no follow-up
@@ -121,6 +156,23 @@ docs/todo.md  2 hits
 
 The path is a header line, once per file, then one line per hit. The bracket
 shows the two innermost enclosing headings.
+
+No match is still exit 1, but it prints an answer rather than nothing. The first
+line says what was searched and how big it was, then up to three headings that
+share words with the pattern, then the next thing to try:
+
+```sh
+mdq grep docs/todo.md 'Asset chat image swap'
+no match for /Asset chat image swap/ in docs/todo.md (4338 lines, 93 headings)
+closest headings: "Asset chat - session-only by design (slice 6)" :410
+                  "Item library - the deliberate gaps" :1398
+try a shorter pattern or `mdq toc docs/todo.md`
+```
+
+A heading is only offered when it shares at least one word with the pattern, so
+a pattern with nothing like it in the document prints the first line alone. A
+directory target reports the files scanned instead of the lines, and each
+suggested heading carries its file path.
 
 ### tasks
 
@@ -188,6 +240,10 @@ kind for every item, carries the full path on each one, and never truncates.
 Matching runs in tiers: exact names first, then prefixes, then substrings. The
 first tier with any match wins. Several matches in that tier print the
 candidates with line numbers and exit 2, so the caller can pick one.
+
+`mdq section` takes any number of headings and resolves each on its own, so
+`mdq section guide.md 'Conventions' 'Endpoints'` prints two sections. Quote each
+one. Bare numbers are still line numbers, one per argument.
 
 ## Task grammar
 
@@ -263,7 +319,7 @@ the parent heading.
 ```
 0   success
 1   no match
-2   ambiguous match, or a usage error
+2   ambiguous match, a partly resolved section list, or a usage error
 ```
 
 Output is deterministic. The same input always produces byte identical output,

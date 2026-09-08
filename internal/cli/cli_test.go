@@ -142,6 +142,110 @@ func TestSectionNoMatchExitsOne(t *testing.T) {
 	}
 }
 
+func TestSectionSeveralHeadingsInOneCall(t *testing.T) {
+	out, _, code := run(t, "section", fixture, "Code", "Plan")
+	if code != OK {
+		t.Fatalf("exit %d, out:\n%s", code, out)
+	}
+	code0 := strings.Index(out, fixture+":25: ## Code")
+	plan := strings.Index(out, fixture+":17: ## Plan")
+	if code0 != 0 || plan < 0 {
+		t.Fatalf("both sections should print, in the order asked:\n%s", out)
+	}
+	if plan < code0 {
+		t.Fatalf("order was not preserved:\n%s", out)
+	}
+	if !strings.Contains(out, "Text before the fence.") || !strings.Contains(out, "first task #alpha") {
+		t.Fatalf("a body is missing:\n%s", out)
+	}
+}
+
+func TestSectionMaxLinesAppliesPerSection(t *testing.T) {
+	out, _, _ := run(t, "section", fixture, "Plan", "Code", "--max-lines", "2")
+	if strings.Count(out, "more lines, use --max-lines") != 2 {
+		t.Fatalf("each section should truncate on its own:\n%s", out)
+	}
+}
+
+func TestSectionKeepsPrintingPastAMiss(t *testing.T) {
+	out, _, code := run(t, "section", fixture, "no such heading", "Plan")
+	if code != Ambiguous {
+		t.Fatalf("exit %d, want 2", code)
+	}
+	if !strings.Contains(out, "no heading matching 'no such heading'") {
+		t.Fatalf("the miss was not reported:\n%s", out)
+	}
+	if !strings.Contains(out, fixture+":17: ## Plan") || !strings.Contains(out, "first task #alpha") {
+		t.Fatalf("a miss should not stop the other headings:\n%s", out)
+	}
+}
+
+func TestSectionAmbiguousAmongSeveralHeadingsExitsTwo(t *testing.T) {
+	out, _, code := run(t, "section", fixture, "Plan", "ambiguous")
+	if code != Ambiguous {
+		t.Fatalf("exit %d, want 2", code)
+	}
+	if !strings.Contains(out, fixture+":17: ## Plan") {
+		t.Fatalf("the resolved heading should still print:\n%s", out)
+	}
+	if !strings.Contains(out, "headings match") {
+		t.Fatalf("candidates not listed:\n%s", out)
+	}
+}
+
+func TestSectionBareNumbersStillResolveAsLines(t *testing.T) {
+	out, _, code := run(t, "section", fixture, "17", "25")
+	if code != OK {
+		t.Fatalf("exit %d, out:\n%s", code, out)
+	}
+	if !strings.Contains(out, fixture+":17: ## Plan") || !strings.Contains(out, fixture+":25: ## Code") {
+		t.Fatalf("line numbers should each resolve:\n%s", out)
+	}
+}
+
+func TestSectionFallsBackToAnUnquotedMultiWordHeading(t *testing.T) {
+	out, _, code := run(t, "section", fixture, "Ambiguous", "Two")
+	if code != OK {
+		t.Fatalf("exit %d, out:\n%s", code, out)
+	}
+	if !strings.Contains(out, fixture+":44: ## Ambiguous Two") || !strings.Contains(out, "body b") {
+		t.Fatalf("unquoted words should join when they only resolve together:\n%s", out)
+	}
+	if strings.Contains(out, "no heading matching") {
+		t.Fatalf("the joined form resolved, so nothing should be reported missing:\n%s", out)
+	}
+}
+
+func TestSectionMissingHeadingSaysWhatItSearched(t *testing.T) {
+	out, _, code := run(t, "section", fixture, "Ambiguous Three")
+	if code != NoMatch {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	want := "no heading matching 'Ambiguous Three' in " + fixture + " (9 headings)\n"
+	if !strings.HasPrefix(out, want) {
+		t.Fatalf("first line is wrong:\n%s", out)
+	}
+	if !strings.Contains(out, `closest headings: "Ambiguous One" :40`) {
+		t.Fatalf("closest headings missing:\n%s", out)
+	}
+	if !strings.Contains(out, "\n                  \"Ambiguous Two\" :44\n") {
+		t.Fatalf("continuation lines should align under the first:\n%s", out)
+	}
+	if !strings.Contains(out, "try a shorter heading or `mdq toc "+fixture+"`") {
+		t.Fatalf("no next step suggested:\n%s", out)
+	}
+}
+
+func TestSectionMissingHeadingWithNothingCloseListsNoHeadings(t *testing.T) {
+	out, _, code := run(t, "section", fixture, "zzzqqq")
+	if code != NoMatch {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	if strings.Contains(out, "closest headings") {
+		t.Fatalf("a query sharing no word should list nothing:\n%s", out)
+	}
+}
+
 func TestGrepTagsEachHitWithItsSection(t *testing.T) {
 	out, _, code := run(t, "grep", fixture, "task")
 	if code != OK {
@@ -168,6 +272,65 @@ func TestGrepRegexAndCase(t *testing.T) {
 	}
 	if _, _, code := run(t, "grep", fixture, "PLAN", "-i"); code != OK {
 		t.Fatal("-i should ignore case")
+	}
+}
+
+func TestGrepNoMatchSaysWhatItSearched(t *testing.T) {
+	out, _, code := run(t, "grep", fixture, "Ambiguous Three sausage")
+	if code != NoMatch {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	want := "no match for /Ambiguous Three sausage/ in " + fixture + " (50 lines, 9 headings)\n"
+	if !strings.HasPrefix(out, want) {
+		t.Fatalf("first line is wrong:\n%s", out)
+	}
+	if !strings.Contains(out, `closest headings: "Ambiguous One" :40`) {
+		t.Fatalf("closest headings missing:\n%s", out)
+	}
+	if !strings.Contains(out, "\n                  \"Ambiguous Two\" :44\n") {
+		t.Fatalf("continuation lines should align under the first:\n%s", out)
+	}
+	if !strings.HasSuffix(out, "try a shorter pattern or `mdq toc "+fixture+"`\n") {
+		t.Fatalf("no next step suggested:\n%s", out)
+	}
+}
+
+func TestGrepNoMatchListsAtMostThreeHeadings(t *testing.T) {
+	out, _, _ := run(t, "grep", fixture, "ambiguous plan code deep sausage")
+	if n := strings.Count(out, ":"); n < 1 {
+		t.Fatalf("expected some candidates:\n%s", out)
+	}
+	if got := strings.Count(out, "\" :"); got > 3 {
+		t.Fatalf("listed %d headings, want at most 3:\n%s", got, out)
+	}
+}
+
+func TestGrepNoMatchWithNothingCloseListsNoHeadings(t *testing.T) {
+	out, _, code := run(t, "grep", fixture, "zzzqqq")
+	if code != NoMatch {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	if strings.Contains(out, "closest headings") {
+		t.Fatalf("a pattern sharing no word should list nothing:\n%s", out)
+	}
+	if !strings.Contains(out, "no match for /zzzqqq/") {
+		t.Fatalf("miss line missing:\n%s", out)
+	}
+}
+
+func TestGrepNoMatchOnADirectoryCountsFiles(t *testing.T) {
+	out, _, code := run(t, "grep", "../../testdata", "Ambiguous Three sausage")
+	if code != NoMatch {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	if !regexp.MustCompile(`^no match for /Ambiguous Three sausage/ in \.\./\.\./testdata \(3 files, \d+ headings\)\n`).MatchString(out) {
+		t.Fatalf("a directory should report files scanned:\n%s", out)
+	}
+	if !strings.Contains(out, `"Ambiguous One" ../../testdata/sample.md:40`) {
+		t.Fatalf("a directory candidate should name its file:\n%s", out)
+	}
+	if !strings.HasSuffix(out, "try a shorter pattern or one file\n") {
+		t.Fatalf("no next step suggested:\n%s", out)
 	}
 }
 
@@ -295,6 +458,34 @@ func TestRealTodoSection(t *testing.T) {
 	}
 	if !strings.Contains(out, "more lines, use --max-lines") {
 		t.Fatal("expected the body to be truncated")
+	}
+}
+
+func TestRealTodoSeveralHeadingsInOneCall(t *testing.T) {
+	requireFile(t, realTodo)
+	out, _, code := run(t, "section", realTodo, "Housekeeping", "LLM", "--no-body")
+	if code != OK {
+		t.Fatalf("exit %d, out:\n%s", code, out)
+	}
+	if strings.Count(out, "body not printed") != 2 {
+		t.Fatalf("expected two section outlines:\n%s", out)
+	}
+	if !strings.Contains(out, "## Housekeeping") || !strings.Contains(out, "## LLM") {
+		t.Fatalf("a heading is missing:\n%s", out)
+	}
+}
+
+func TestRealTodoGrepMissSuggestsTheNearestHeading(t *testing.T) {
+	requireFile(t, realTodo)
+	out, _, code := run(t, "grep", realTodo, "Housekeeping sausage widget")
+	if code != NoMatch {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	if !strings.Contains(out, "no match for /Housekeeping sausage widget/ in "+realTodo+" (") {
+		t.Fatalf("miss line is wrong:\n%s", out)
+	}
+	if !strings.Contains(out, `closest headings: "Housekeeping"`) {
+		t.Fatalf("the obvious near heading was not offered:\n%s", out)
 	}
 }
 
