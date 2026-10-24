@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"regexp"
 	"strings"
@@ -323,7 +324,7 @@ func TestGrepNoMatchOnADirectoryCountsFiles(t *testing.T) {
 	if code != NoMatch {
 		t.Fatalf("exit %d, want 1", code)
 	}
-	if !regexp.MustCompile(`^no match for /Ambiguous Three sausage/ in \.\./\.\./testdata \(3 files, \d+ headings\)\n`).MatchString(out) {
+	if !regexp.MustCompile(`^no match for /Ambiguous Three sausage/ in \.\./\.\./testdata \(\d+ files, \d+ headings\)\n`).MatchString(out) {
 		t.Fatalf("a directory should report files scanned:\n%s", out)
 	}
 	if !strings.Contains(out, `"Ambiguous One" ../../testdata/sample.md:40`) {
@@ -570,4 +571,115 @@ func TestReadOnly(t *testing.T) {
 	if !before.ModTime().Equal(after.ModTime()) || before.Size() != after.Size() {
 		t.Fatal("mdq must never write to the files it reads")
 	}
+}
+
+const linksFixture = "../../testdata/links.md"
+
+func TestLinksTextOutput(t *testing.T) {
+	out, _, code := run(t, "links", linksFixture)
+	if code != OK {
+		t.Fatalf("exit %d", code)
+	}
+	if !strings.HasPrefix(out, linksFixture+"  12 links\n") {
+		t.Fatalf("header is wrong:\n%s", out)
+	}
+	if !strings.Contains(out, "\n 7 [Links]: sample.md  -> ../../testdata/sample.md\n") {
+		t.Fatalf("internal row is wrong:\n%s", out)
+	}
+	if !strings.Contains(out, "\n12 [Links > External]: https://example.com/a\n") {
+		t.Fatalf("external row is wrong:\n%s", out)
+	}
+	if !strings.Contains(out, "split.md  -> ../../testdata/split.md (missing)\n") {
+		t.Fatalf("missing marker absent:\n%s", out)
+	}
+}
+
+func TestLinksInternalExternal(t *testing.T) {
+	out, _, _ := run(t, "links", linksFixture, "--internal")
+	if strings.Contains(out, "https://") || !strings.Contains(out, "sample.md") {
+		t.Fatalf("--internal is wrong:\n%s", out)
+	}
+	out, _, _ = run(t, "links", linksFixture, "--external")
+	if strings.Contains(out, "sample.md") || !strings.Contains(out, "mailto:a@b.co") {
+		t.Fatalf("--external is wrong:\n%s", out)
+	}
+	if _, _, code := run(t, "links", linksFixture, "--internal", "--external"); code != Ambiguous {
+		t.Fatalf("both flags should exit 2, got %d", code)
+	}
+}
+
+func TestLinksSection(t *testing.T) {
+	out, _, code := run(t, "links", linksFixture, "--section", "External")
+	if code != OK || !strings.Contains(out, "example.com") || strings.Contains(out, "sample.md") {
+		t.Fatalf("--section is wrong (exit %d):\n%s", code, out)
+	}
+}
+
+func TestLinksBare(t *testing.T) {
+	out, _, _ := run(t, "links", linksFixture)
+	if strings.Contains(out, "bare.example.com") {
+		t.Fatalf("bare URL shown by default:\n%s", out)
+	}
+	out, _, _ = run(t, "links", linksFixture, "--bare")
+	if !strings.Contains(out, "https://bare.example.com/path\n") {
+		t.Fatalf("--bare did not add the URL:\n%s", out)
+	}
+}
+
+func TestLinksJSON(t *testing.T) {
+	out, _, code := run(t, "links", linksFixture, "--json", "--section", "Split")
+	if code != OK {
+		t.Fatalf("exit %d", code)
+	}
+	for _, want := range []string{`"file": "` + linksFixture + `"`, `"line": 27`, `"kind": "inline"`, `"target": "split.md"`, `"missing": true`, `"section": "Split"`} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("json lacks %s:\n%s", want, out)
+		}
+	}
+	out, _, code = run(t, "links", "../../testdata/sample.md", "--json")
+	if code != NoMatch || out != "[]\n" {
+		t.Fatalf("empty json: exit %d, out %q", code, out)
+	}
+}
+
+func TestLinksNoneExitsOne(t *testing.T) {
+	out, _, code := run(t, "links", fixture)
+	if code != NoMatch || out != "" {
+		t.Fatalf("exit %d, out %q", code, out)
+	}
+}
+
+func TestLinksDirectory(t *testing.T) {
+	out, _, code := run(t, "links", "../../testdata/linkrepo")
+	if code != OK {
+		t.Fatalf("exit %d", code)
+	}
+	if !strings.HasPrefix(out, "../../testdata/linkrepo/docs/sub/a.md  3 links\n") {
+		t.Fatalf("header is wrong:\n%s", out)
+	}
+	if !strings.Contains(out, "docs/b.md  -> ../../testdata/linkrepo/docs/b.md\n") || !strings.Contains(out, "nope.md  -> ../../testdata/linkrepo/docs/sub/nope.md (missing)\n") {
+		t.Fatalf("rows are wrong:\n%s", out)
+	}
+}
+
+func TestRealLinksGlossaryAnchor(t *testing.T) {
+	const f = "/Users/jasperlyons/workspace/projects/mavexa/mavexa/docs/pages-and-pipeline.md"
+	requireFile(t, f)
+	out, _, code := run(t, "links", f, "--json")
+	if code != OK {
+		t.Fatalf("exit %d", code)
+	}
+	var links []struct {
+		Line           int
+		Target, Anchor string
+	}
+	if err := json.Unmarshal([]byte(out), &links); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range links {
+		if l.Line == 234 && l.Target == "glossary.md" && l.Anchor == "effective-kind" {
+			return
+		}
+	}
+	t.Fatalf("glossary.md#effective-kind at line 234 not found")
 }

@@ -28,6 +28,7 @@ const usage = `mdq - query markdown without reading the whole file
   mdq section FILE HEADING|LINE... [flags]  print one or more sections
   mdq grep FILE|DIR PATTERN [-i]            search, each hit tagged with its section
   mdq tasks FILE|DIR [flags]                list task items
+  mdq links FILE|DIR [--internal|--external] list links, each tagged with its section
   mdq help                                  this text
 
 section flags:
@@ -77,6 +78,8 @@ func Run(argv []string, out, errw io.Writer) int {
 		code, err = cmdGrep(rest, out)
 	case "tasks":
 		code, err = cmdTasks(rest, out)
+	case "links":
+		code, err = cmdLinks(rest, out)
 	case "help", "-h", "--help":
 		fmt.Fprint(out, usage)
 		return OK
