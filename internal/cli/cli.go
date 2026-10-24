@@ -49,6 +49,10 @@ tasks flags:
 global:
   --max-lines N      cap any printed body, default 200
 
+grep PATTERN is a Go regular expression, so alternation is A|B. A \| is a
+literal pipe, not alternation as it would be in GNU grep, and mdq rewrites it
+to A|B when nothing else in the pattern is regex syntax.
+
 HEADING matching is case insensitive and ignores leading hashes, emoji and
 trailing status text. A unique prefix works, so does /a regex/, so does a line
 number. Several matches print the candidates and exit 2.
@@ -390,6 +394,11 @@ func reportNoGrepMatch(out io.Writer, target, pattern string, scope grepScope, n
 		size = fmt.Sprintf("%s, %s", plural(scope.files, "file"), plural(scope.headings, "heading"))
 	}
 	fmt.Fprintf(out, "no match for /%s/ in %s (%s)\n", pattern, target, size)
+	// Only worth saying when the pattern was left as written. Once the rewrite
+	// has run, mdq did read the \| as alternation and the note would be wrong.
+	if strings.Contains(pattern, `\|`) && md.FixAlternation(pattern) == pattern {
+		fmt.Fprintf(out, "note: \\| is a literal pipe here, use A|B for alternation\n")
+	}
 
 	sort.SliceStable(near, func(i, j int) bool {
 		if near[i].score != near[j].score {

@@ -147,6 +147,12 @@ read to find out where you landed. The pattern is a Go regular expression and
 the search is case sensitive unless you pass `-i`. A directory argument is
 walked for `.md`, `.markdown` and `.mdx` files, sorted.
 
+Alternation is `A|B`. In Go a `\|` is a literal pipe rather than alternation, so
+`mdq grep FILE 'A\|B'` written out of GNU grep habit would find nothing. mdq
+rewrites `\|` to `|` when the rest of the pattern is plain text. A pattern
+carrying any other regex syntax is left as written, and if such a pattern finds
+nothing the no match message adds a note saying the `\|` was a literal pipe.
+
 ```sh
 mdq grep docs/todo.md 'unsubscribe'
 docs/todo.md  2 hits

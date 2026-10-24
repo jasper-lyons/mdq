@@ -92,7 +92,7 @@ func (d *Document) FindHeading(query string) Match {
 		return Match{}
 	}
 	if len(q) > 2 && strings.HasPrefix(q, "/") && strings.HasSuffix(q, "/") {
-		re, err := regexp.Compile("(?i)" + q[1:len(q)-1])
+		re, err := regexp.Compile("(?i)" + FixAlternation(q[1:len(q)-1]))
 		if err != nil {
 			return Match{}
 		}
@@ -140,6 +140,36 @@ var (
 	wordRe   = regexp.MustCompile(`[a-z0-9]+`)
 	escapeRe = regexp.MustCompile(`\\.`)
 )
+
+// regexMeta are the characters that make a pattern more than plain text.
+const regexMeta = `.+*?()|[]{}^$`
+
+// FixAlternation rewrites GNU basic regex alternation, A\|B, into Go's A|B.
+// Callers reach for \| out of grep habit, and Go reads it as a literal pipe, so
+// the search quietly returns nothing. The rewrite only happens when \| is the
+// only regex syntax in the pattern. Any other escape or metacharacter means the
+// caller is writing Go syntax on purpose, and the pattern is left alone.
+func FixAlternation(pattern string) string {
+	escapedPipe := false
+	for i := 0; i < len(pattern); i++ {
+		c := pattern[i]
+		if c == '\\' {
+			if i+1 >= len(pattern) || pattern[i+1] != '|' {
+				return pattern
+			}
+			escapedPipe = true
+			i++
+			continue
+		}
+		if strings.IndexByte(regexMeta, c) >= 0 {
+			return pattern
+		}
+	}
+	if !escapedPipe {
+		return pattern
+	}
+	return strings.ReplaceAll(pattern, `\|`, "|")
+}
 
 // stopWords carry no signal when comparing a query to a heading.
 var stopWords = map[string]bool{

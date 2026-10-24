@@ -335,6 +335,36 @@ func TestGrepNoMatchOnADirectoryCountsFiles(t *testing.T) {
 	}
 }
 
+func TestGrepRewritesGrepStyleAlternation(t *testing.T) {
+	out, _, code := run(t, "grep", fixture, `Plan\|Code`)
+	if code != OK {
+		t.Fatalf("exit %d, output:\n%s", code, out)
+	}
+	if !strings.Contains(out, "## Plan") || !strings.Contains(out, "## Code") {
+		t.Fatalf("both branches should match:\n%s", out)
+	}
+	if strings.Count(out, "\n") != 3 {
+		t.Fatalf("expected a header and two hits:\n%s", out)
+	}
+	// The rewrite ran, so the miss is a real miss and the note would be wrong.
+	out, _, code = run(t, "grep", fixture, `nothing\|missing`)
+	if code != NoMatch {
+		t.Fatalf("exit %d, output:\n%s", code, out)
+	}
+	if strings.Contains(out, "note:") {
+		t.Fatalf("a rewritten pattern should not be told its pipe was literal:\n%s", out)
+	}
+	// Another metacharacter is present, so the pattern was left as written and
+	// the \| really did match a literal pipe.
+	out, _, code = run(t, "grep", fixture, `.*\|missing`)
+	if code != NoMatch {
+		t.Fatalf("exit %d, output:\n%s", code, out)
+	}
+	if !strings.Contains(out, `note: \| is a literal pipe here, use A|B for alternation`) {
+		t.Fatalf("a miss on an untouched \\| pattern should explain the escape:\n%s", out)
+	}
+}
+
 func TestTasksDefaultsToOpen(t *testing.T) {
 	out, _, code := run(t, "tasks", fixture)
 	if code != OK {

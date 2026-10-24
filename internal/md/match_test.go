@@ -116,3 +116,20 @@ func TestNumberedDecisionHeadings(t *testing.T) {
 		t.Fatalf("container heading not found: %+v", m.Found)
 	}
 }
+
+func TestFixAlternation(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{`section\|tasks`, "section|tasks"},
+		{`a\|b\|c`, "a|b|c"},
+		{`.*\|tasks`, `.*\|tasks`},
+		{`[st]\|tasks`, `[st]\|tasks`},
+		{`\bqueue\|writes`, `\bqueue\|writes`},
+		{"section|tasks", "section|tasks"},
+		{"plain words", "plain words"},
+	}
+	for _, c := range cases {
+		if got := FixAlternation(c.in); got != c.want {
+			t.Errorf("FixAlternation(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

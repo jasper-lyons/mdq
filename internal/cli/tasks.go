@@ -12,6 +12,7 @@ import (
 )
 
 func compile(pattern string, ignoreCase bool) (*regexp.Regexp, error) {
+	pattern = md.FixAlternation(pattern)
 	if ignoreCase {
 		pattern = "(?i)" + pattern
 	}
